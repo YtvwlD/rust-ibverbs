@@ -1,4 +1,4 @@
-use std::ops;
+use core::ops;
 
 pub trait SliceIndex<T: ?Sized> {
     /// The output type returned by methods.
@@ -45,7 +45,7 @@ impl<T> SliceIndex<[T]> for ops::Range<usize> {
 
     #[inline]
     unsafe fn get_unchecked(self, slice: &[T]) -> &[T] {
-        use std::slice::from_raw_parts;
+        use core::slice::from_raw_parts;
         from_raw_parts(slice.as_ptr().add(self.start), self.end - self.start)
     }
 

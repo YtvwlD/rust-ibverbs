@@ -27,7 +27,8 @@ optional = true
 features = ["derive"]
 
 [features]
-default = ["serde"]
+default = ["serde", "std"]
+std = []
 
 [dev-dependencies]
 bincode = "1.3"
