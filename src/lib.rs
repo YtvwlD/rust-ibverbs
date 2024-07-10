@@ -60,19 +60,33 @@
 //! [RDMAmojo]: http://www.rdmamojo.com/
 //! [1]: http://www.rdmamojo.com/2012/05/18/libibverbs/
 
+#![cfg_attr(not(feature = "std"), no_std)]
+
 #![deny(missing_docs)]
 #![warn(rust_2018_idioms)]
 // avoid warnings about RDMAmojo, iWARP, InfiniBand, etc. not being in backticks
 #![allow(clippy::doc_markdown)]
 
-use std::convert::TryInto;
-use std::ffi::CStr;
+#[cfg(not(feature = "std"))]
+extern crate alloc;
+
+use core::convert::TryInto;
+use core::ffi::{c_void, CStr};
+use core::marker::PhantomData;
+use core::mem;
+use core::ops::Range;
+use core::ptr;
+#[cfg(feature = "std")]
 use std::io;
-use std::marker::PhantomData;
-use std::mem;
-use std::ops::Range;
-use std::os::raw::c_void;
-use std::ptr;
+#[cfg(not(feature = "std"))]
+use alloc::vec::Vec;
+
+#[cfg(feature = "std")]
+type Result<T> = io::Result<T>;
+#[cfg(not(feature = "std"))]
+type Result<T> = core::result::Result<T, &'static str>;
+#[cfg(not(feature = "std"))]
+use alloc::string::ToString;
 
 const PORT_NUM: u8 = 1;
 
@@ -99,7 +113,7 @@ mod sliceindex;
 ///  - `EPERM`: Permission denied.
 ///  - `ENOMEM`: Insufficient memory to complete the operation.
 ///  - `ENOSYS`: No kernel support for RDMA.
-pub fn devices() -> io::Result<DeviceList> {
+pub fn devices() -> Result<DeviceList> {
     let mut n = 0i32;
     let devices = unsafe { ffi::ibv_get_device_list(&mut n as *mut _) };
 
@@ -108,7 +122,7 @@ pub fn devices() -> io::Result<DeviceList> {
     }
 
     let devices = unsafe {
-        use std::slice;
+        use core::slice;
         slice::from_raw_parts_mut(devices, n as usize)
     };
     Ok(DeviceList(devices))
@@ -246,7 +260,7 @@ impl<'devlist> Device<'devlist> {
     ///  - `ENOMEM`: Out of memory (from `ibv_query_port_attr`).
     ///  - `EMFILE`: Too many files are opened by this process (from `ibv_query_gid`).
     ///  - Other: the device is not in `ACTIVE` or `ARMED` state.
-    pub fn open(&self) -> io::Result<Context> {
+    pub fn open(&self) -> Result<Context> {
         Context::with_device(*self.0)
     }
 
@@ -293,7 +307,7 @@ impl<'devlist> Device<'devlist> {
     /// # Errors
     ///
     ///  - `EMFILE`: Too many files are opened by this process.
-    pub fn guid(&self) -> io::Result<Guid> {
+    pub fn guid(&self) -> Result<Guid> {
         let guid_int = unsafe { ffi::ibv_get_device_guid(*self.0) };
         let guid: Guid = guid_int.into();
         if guid.is_reserved() {
@@ -307,7 +321,7 @@ impl<'devlist> Device<'devlist> {
     /// # Errors
     ///
     ///  - `ENOTSUP`: Stable index is not supported
-    pub fn index(&self) -> io::Result<i32> {
+    pub fn index(&self) -> Result<i32> {
         let idx = unsafe { ffi::ibv_get_device_index(*self.0) };
         if idx == -1 {
             Err(io::Error::new(
@@ -332,7 +346,7 @@ unsafe impl Send for Context {}
 
 impl Context {
     /// Opens a context for the given device, and queries its port and gid.
-    fn with_device(dev: *mut ffi::ibv_device) -> io::Result<Context> {
+    fn with_device(dev: *mut ffi::ibv_device) -> Result<Context> {
         assert!(!dev.is_null());
 
         let ctx = unsafe { ffi::ibv_open_device(dev) };
@@ -411,7 +425,7 @@ impl Context {
     ///
     ///  - `EINVAL`: Invalid `min_cq_entries` (must be `1 <= cqe <= dev_cap.max_cqe`).
     ///  - `ENOMEM`: Not enough resources to complete this operation.
-    pub fn create_cq(&self, min_cq_entries: i32, id: isize) -> io::Result<CompletionQueue<'_>> {
+    pub fn create_cq(&self, min_cq_entries: i32, id: isize) -> Result<CompletionQueue<'_>> {
         let cq = unsafe {
             ffi::ibv_create_cq(
                 self.ctx,
@@ -871,7 +885,7 @@ impl<'res> QueuePairBuilder<'res> {
     ///  - `ENOMEM`: Not enough resources to complete this operation.
     ///  - `ENOSYS`: QP with this Transport Service Type isn't supported by this RDMA device.
     ///  - `EPERM`: Not enough permissions to create a QP with this Transport Service Type.
-    pub fn build(&self) -> io::Result<PreparedQueuePair<'res>> {
+    pub fn build(&self) -> Result<PreparedQueuePair<'res>> {
         let mut attr = ffi::ibv_qp_init_attr {
             qp_context: unsafe { ptr::null::<c_void>().offset(self.ctx) } as *mut _,
             send_cq: self.send.cq as *const _ as *mut _,
@@ -1090,7 +1104,7 @@ impl<'res> PreparedQueuePair<'res> {
     ///  - `ENOMEM`: Not enough resources to complete this operation.
     ///
     /// [RDMAmojo]: http://www.rdmamojo.com/2014/01/18/connecting-queue-pairs/
-    pub fn handshake(self, remote: QueuePairEndpoint) -> io::Result<QueuePair<'res>> {
+    pub fn handshake(self, remote: QueuePairEndpoint) -> Result<QueuePair<'res>> {
         // init and associate with port
         let mut attr = ffi::ibv_qp_attr {
             qp_state: ffi::ibv_qp_state::IBV_QPS_INIT,
@@ -1196,7 +1210,7 @@ pub struct LocalMemoryRegion<T> {
 unsafe impl<T> Send for LocalMemoryRegion<T> {}
 unsafe impl<T> Sync for LocalMemoryRegion<T> {}
 
-use std::ops::{Deref, DerefMut};
+use core::ops::{Deref, DerefMut};
 impl<T> Deref for LocalMemoryRegion<T> {
     type Target = [T];
     fn deref(&self) -> &Self::Target {
@@ -1322,7 +1336,7 @@ impl<'ctx> ProtectionDomain<'ctx> {
     pub fn allocate<T: Sized + Copy + Default>(
         &self,
         n: usize,
-    ) -> io::Result<LocalMemoryRegion<T>> {
+    ) -> Result<LocalMemoryRegion<T>> {
         assert!(n > 0);
         assert!(mem::size_of::<T>() > 0);
 
@@ -1420,7 +1434,7 @@ impl<'res> QueuePair<'res> {
         mr: &mut LocalMemoryRegion<T>,
         range: R,
         wr_id: u64,
-    ) -> io::Result<()>
+    ) -> Result<()>
     where
         R: sliceindex::SliceIndex<[T], Output = [T]>,
     {
@@ -1504,7 +1518,7 @@ impl<'res> QueuePair<'res> {
         mr: &mut LocalMemoryRegion<T>,
         range: R,
         wr_id: u64,
-    ) -> io::Result<()>
+    ) -> Result<()>
     where
         R: sliceindex::SliceIndex<[T], Output = [T]>,
     {
@@ -1583,7 +1597,7 @@ impl<'res> QueuePair<'res> {
         remote_mr: &mut RemoteMemoryRegion<T>,
         remote_range: Range<u64>,
         wr_id: u64,
-    ) -> io::Result<()>
+    ) -> Result<()>
     where
         R: sliceindex::SliceIndex<[T], Output = [T]>,
     {
@@ -1697,7 +1711,7 @@ impl<'res> QueuePair<'res> {
         local_mr: &mut LocalMemoryRegion<T>,
         local_range: R,
         wr_id: u64,
-    ) -> io::Result<()>
+    ) -> Result<()>
     where
         R: sliceindex::SliceIndex<[T], Output = [T]>,
     {
@@ -1798,7 +1812,7 @@ mod test_serde {
 
         let mut qpe = qpe_default;
         qpe.gid.as_mut().unwrap().raw =
-            unsafe { std::mem::transmute([87_u64.to_be(), 192_u64.to_be()]) };
+            unsafe { core::mem::transmute([87_u64.to_be(), 192_u64.to_be()]) };
         let encoded = bincode::serialize(&qpe).unwrap();
 
         let decoded: QueuePairEndpoint = bincode::deserialize(&encoded).unwrap();
