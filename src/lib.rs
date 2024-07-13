@@ -81,7 +81,7 @@ use std::io;
 #[cfg(not(feature = "std"))]
 use alloc::vec::Vec;
 #[cfg(not(feature = "std"))]
-use core2::io;
+use core2::io::{self, ErrorKind};
 
 const PORT_NUM: u8 = 1;
 
@@ -113,7 +113,8 @@ pub fn devices() -> io::Result<DeviceList> {
     let devices = unsafe { ffi::ibv_get_device_list(&mut n as *mut _) };
 
     if devices.is_null() {
-        return Err(io::Error::last_os_error());
+        // TODO: somehow get the correct error
+        return Err(io::Error::from(ErrorKind::Uncategorized));
     }
 
     let devices = unsafe {
@@ -306,7 +307,8 @@ impl<'devlist> Device<'devlist> {
         let guid_int = unsafe { ffi::ibv_get_device_guid(*self.0) };
         let guid: Guid = guid_int.into();
         if guid.is_reserved() {
-            Err(io::Error::last_os_error())
+            // TODO: somehow get the correct error
+            Err(io::Error::from(ErrorKind::AddrNotAvailable))
         } else {
             Ok(guid)
         }
@@ -320,7 +322,7 @@ impl<'devlist> Device<'devlist> {
         let idx = unsafe { ffi::ibv_get_device_index(*self.0) };
         if idx == -1 {
             Err(io::Error::new(
-                io::ErrorKind::Unsupported,
+                io::ErrorKind::Other,
                 "device index not known",
             ))
         } else {
@@ -391,7 +393,8 @@ impl Context {
         let mut gid = Gid::default();
         let ok = unsafe { ffi::ibv_query_gid(ctx, PORT_NUM, 0, gid.as_mut()) };
         if ok != 0 {
-            return Err(io::Error::last_os_error());
+            // TODO: somehow get the correct error
+            return Err(io::Error::from(ErrorKind::AddrNotAvailable));
         }
 
         Ok(Context {
@@ -432,7 +435,8 @@ impl Context {
         };
 
         if cq.is_null() {
-            Err(io::Error::last_os_error())
+            // TODO: somehow get the correct error
+            Err(io::Error::from(ErrorKind::Uncategorized))
         } else {
             Ok(CompletionQueue {
                 _phantom: PhantomData,
@@ -893,7 +897,8 @@ impl<'res> QueuePairBuilder<'res> {
 
         let qp = unsafe { ffi::ibv_create_qp(self.pd.pd, &mut attr as *mut _) };
         if qp.is_null() {
-            Err(io::Error::last_os_error())
+            // TODO: somehow get the correct error
+            Err(io::Error::from(ErrorKind::Uncategorized))
         } else {
             Ok(PreparedQueuePair {
                 ctx: self.pd.ctx,
@@ -1333,7 +1338,8 @@ impl<'ctx> ProtectionDomain<'ctx> {
         // function.
 
         if mr.is_null() {
-            Err(io::Error::last_os_error())
+            // TODO: somehow get the correct error
+            Err(io::Error::from(ErrorKind::Other))
         } else {
             Ok(MemoryRegion { mr, data })
         }
