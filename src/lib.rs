@@ -370,7 +370,7 @@ impl Context {
             )
         };
         if errno != 0 {
-            return Err(io::Error::from_raw_os_error(errno));
+            return Err(io::Error::from_errno(errno).unwrap());
         }
 
         // From http://www.rdmamojo.com/2012/08/02/ibv_query_gid/:
@@ -532,7 +532,7 @@ impl<'a> Drop for CompletionQueue<'a> {
     fn drop(&mut self) {
         let errno = unsafe { ffi::ibv_destroy_cq(self.cq) };
         if errno != 0 {
-            let e = io::Error::from_raw_os_error(errno);
+            let e = io::Error::from_errno(errno).unwrap();
             panic!("{}", e);
         }
     }
@@ -1115,7 +1115,7 @@ impl<'res> PreparedQueuePair<'res> {
         }
         let errno = unsafe { ffi::ibv_modify_qp(self.qp.qp, &mut attr as *mut _, mask) };
         if errno != 0 {
-            return Err(io::Error::from_raw_os_error(errno));
+            return Err(io::Error::from_errno(errno).unwrap());
         }
 
         // set ready to receive
@@ -1160,7 +1160,7 @@ impl<'res> PreparedQueuePair<'res> {
         }
         let errno = unsafe { ffi::ibv_modify_qp(self.qp.qp, &mut attr as *mut _, mask) };
         if errno != 0 {
-            return Err(io::Error::from_raw_os_error(errno));
+            return Err(io::Error::from_errno(errno).unwrap());
         }
 
         // set ready to send
@@ -1188,7 +1188,7 @@ impl<'res> PreparedQueuePair<'res> {
         }
         let errno = unsafe { ffi::ibv_modify_qp(self.qp.qp, &mut attr as *mut _, mask) };
         if errno != 0 {
-            return Err(io::Error::from_raw_os_error(errno));
+            return Err(io::Error::from_errno(errno).unwrap());
         }
 
         Ok(self.qp)
@@ -1232,7 +1232,7 @@ impl<T> Drop for MemoryRegion<T> {
     fn drop(&mut self) {
         let errno = unsafe { ffi::ibv_dereg_mr(self.mr) };
         if errno != 0 {
-            let e = io::Error::from_raw_os_error(errno);
+            let e = io::Error::from_errno(errno).unwrap();
             panic!("{}", e);
         }
     }
@@ -1350,7 +1350,7 @@ impl<'a> Drop for ProtectionDomain<'a> {
     fn drop(&mut self) {
         let errno = unsafe { ffi::ibv_dealloc_pd(self.pd) };
         if errno != 0 {
-            let e = io::Error::from_raw_os_error(errno);
+            let e = io::Error::from_errno(errno).unwrap();
             panic!("{}", e);
         }
     }
@@ -1451,7 +1451,7 @@ impl<'res> QueuePair<'res> {
         let errno =
             ops.post_send.as_mut().unwrap()(self.qp, &mut wr as *mut _, &mut bad_wr as *mut _);
         if errno != 0 {
-            Err(io::Error::from_raw_os_error(errno))
+            Err(io::Error::from_errno(errno).unwrap())
         } else {
             Ok(())
         }
@@ -1527,7 +1527,7 @@ impl<'res> QueuePair<'res> {
         let errno =
             ops.post_recv.as_mut().unwrap()(self.qp, &mut wr as *mut _, &mut bad_wr as *mut _);
         if errno != 0 {
-            Err(io::Error::from_raw_os_error(errno))
+            Err(io::Error::from_errno(errno).unwrap())
         } else {
             Ok(())
         }
@@ -1539,7 +1539,7 @@ impl<'a> Drop for QueuePair<'a> {
         // TODO: ibv_destroy_qp() fails if the QP is attached to a multicast group.
         let errno = unsafe { ffi::ibv_destroy_qp(self.qp) };
         if errno != 0 {
-            let e = io::Error::from_raw_os_error(errno);
+            let e = io::Error::from_errno(errno).unwrap();
             panic!("{}", e);
         }
     }
