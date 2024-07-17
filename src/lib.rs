@@ -1112,10 +1112,10 @@ impl<'res> PreparedQueuePair<'res> {
             | ffi::ibv_qp_attr_mask::IBV_QP_PKEY_INDEX
             | ffi::ibv_qp_attr_mask::IBV_QP_PORT;
         if let Some(access) = self.access {
-            attr.qp_access_flags = access.0;
+            attr.qp_access_flags = access;
             mask |= ffi::ibv_qp_attr_mask::IBV_QP_ACCESS_FLAGS;
         }
-        let errno = unsafe { ffi::ibv_modify_qp(self.qp.qp, &mut attr as *mut _, mask.0 as i32) };
+        let errno = unsafe { ffi::ibv_modify_qp(self.qp.qp, &mut attr as *mut _, mask) };
         if errno != 0 {
             return Err(io::Error::from_raw_os_error(errno));
         }
@@ -1160,7 +1160,7 @@ impl<'res> PreparedQueuePair<'res> {
             attr.rq_psn = rq_psn;
             mask |= ffi::ibv_qp_attr_mask::IBV_QP_RQ_PSN;
         }
-        let errno = unsafe { ffi::ibv_modify_qp(self.qp.qp, &mut attr as *mut _, mask.0 as i32) };
+        let errno = unsafe { ffi::ibv_modify_qp(self.qp.qp, &mut attr as *mut _, mask) };
         if errno != 0 {
             return Err(io::Error::from_raw_os_error(errno));
         }
@@ -1188,7 +1188,7 @@ impl<'res> PreparedQueuePair<'res> {
             attr.max_rd_atomic = max_rd_atomic;
             mask |= ffi::ibv_qp_attr_mask::IBV_QP_MAX_QP_RD_ATOMIC;
         }
-        let errno = unsafe { ffi::ibv_modify_qp(self.qp.qp, &mut attr as *mut _, mask.0 as i32) };
+        let errno = unsafe { ffi::ibv_modify_qp(self.qp.qp, &mut attr as *mut _, mask) };
         if errno != 0 {
             return Err(io::Error::from_raw_os_error(errno));
         }
@@ -1348,7 +1348,7 @@ impl<'ctx> ProtectionDomain<'ctx> {
                 self.pd,
                 data.as_mut_ptr() as *mut _,
                 n * mem::size_of::<T>(),
-                access.0 as i32,
+                access,
             )
         };
 
@@ -1446,7 +1446,7 @@ impl<'res> QueuePair<'res> {
             sg_list: &mut sge as *mut _,
             num_sge: 1,
             opcode: ffi::ibv_wr_opcode::IBV_WR_SEND,
-            send_flags: ffi::ibv_send_flags::IBV_SEND_SIGNALED.0,
+            send_flags: ffi::ibv_send_flags::IBV_SEND_SIGNALED,
             wr: Default::default(),
             qp_type: Default::default(),
             __bindgen_anon_1: Default::default(),
@@ -1631,7 +1631,7 @@ impl<'res> QueuePair<'res> {
             sg_list: &mut sge as *mut _,
             num_sge: 1,
             opcode: ffi::ibv_wr_opcode::IBV_WR_RDMA_WRITE,
-            send_flags: ffi::ibv_send_flags::IBV_SEND_SIGNALED.0,
+            send_flags: ffi::ibv_send_flags::IBV_SEND_SIGNALED,
             wr: ffi::ibv_send_wr__bindgen_ty_2 {
                 rdma: ffi::ibv_send_wr__bindgen_ty_2__bindgen_ty_1 {
                     remote_addr: remote_mr.addr,
@@ -1745,7 +1745,7 @@ impl<'res> QueuePair<'res> {
             sg_list: &mut sge as *mut _,
             num_sge: 1,
             opcode: ffi::ibv_wr_opcode::IBV_WR_RDMA_READ,
-            send_flags: ffi::ibv_send_flags::IBV_SEND_SIGNALED.0,
+            send_flags: ffi::ibv_send_flags::IBV_SEND_SIGNALED,
             wr: ffi::ibv_send_wr__bindgen_ty_2 {
                 rdma: ffi::ibv_send_wr__bindgen_ty_2__bindgen_ty_1 {
                     remote_addr: remote_mr.addr,
