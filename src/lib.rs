@@ -111,11 +111,7 @@ mod sliceindex;
 ///  - `ENOSYS`: No kernel support for RDMA.
 pub fn devices() -> io::Result<DeviceList> {
     let mut n = 0i32;
-    let devices = unsafe { ffi::ibv_get_device_list(&mut n as *mut _) };
-
-    if devices.is_null() {
-        return Err(io::Error::last_os_error());
-    }
+    let devices = unsafe { ffi::ibv_get_device_list(&mut n as *mut _)? };
 
     let devices = unsafe {
         use core::slice;
@@ -284,7 +280,7 @@ impl<'devlist> Device<'devlist> {
     ///  - an *index* that helps to differentiate between several devices from the same vendor and
     ///    family in the same computer
     pub fn name(&self) -> Option<&'devlist CStr> {
-        let name_ptr = unsafe { ffi::ibv_get_device_name(*self.0) };
+        let name_ptr = unsafe { ffi::ibv_get_device_name(*self.0)? };
         if name_ptr.is_null() {
             None
         } else {
@@ -304,13 +300,10 @@ impl<'devlist> Device<'devlist> {
     ///
     ///  - `EMFILE`: Too many files are opened by this process.
     pub fn guid(&self) -> io::Result<Guid> {
-        let guid_int = unsafe { ffi::ibv_get_device_guid(*self.0) };
+        let guid_int = unsafe { ffi::ibv_get_device_guid(*self.0)? };
         let guid: Guid = guid_int.into();
-        if guid.is_reserved() {
-            Err(io::Error::last_os_error())
-        } else {
-            Ok(guid)
-        }
+        assert!(!guid.is_reserved());
+        Ok(guid)
     }
 
     /// Returns stable IB device index as it is assigned by the kernel
@@ -318,15 +311,8 @@ impl<'devlist> Device<'devlist> {
     ///
     ///  - `ENOTSUP`: Stable index is not supported
     pub fn index(&self) -> io::Result<i32> {
-        let idx = unsafe { ffi::ibv_get_device_index(*self.0) };
-        if idx == -1 {
-            Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "device index not known",
-            ))
-        } else {
-            Ok(idx)
-        }
+        let idx = unsafe { ffi::ibv_get_device_index(*self.0)? };
+        Ok(idx)
     }
 }
 
@@ -345,13 +331,7 @@ impl Context {
     fn with_device(dev: *mut ffi::ibv_device) -> io::Result<Context> {
         assert!(!dev.is_null());
 
-        let ctx = unsafe { ffi::ibv_open_device(dev) };
-        if ctx.is_null() {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                "failed to open device",
-            ));
-        }
+        let ctx = unsafe { ffi::ibv_open_device(dev)? };
 
         // TODO: from http://www.rdmamojo.com/2012/07/21/ibv_query_port/
         //
@@ -362,15 +342,12 @@ impl Context {
         //
         let mut port_attr = ffi::ibv_port_attr::default();
         let errno = unsafe {
-            ffi::ibv_query_port(
+                ffi::ibv_query_port(
                 ctx,
                 PORT_NUM,
                 &mut port_attr as *mut ffi::ibv_port_attr as *mut _,
-            )
+            )?
         };
-        if errno != 0 {
-            return Err(io::Error::from_raw_os_error(errno));
-        }
 
         // From http://www.rdmamojo.com/2012/08/02/ibv_query_gid/:
         //
@@ -390,11 +367,8 @@ impl Context {
 
         // let mut gid = ffi::ibv_gid::default();
         let mut gid = Gid::default();
-        let ok = unsafe { ffi::ibv_query_gid(ctx, PORT_NUM, 0, gid.as_mut()) };
-        if ok != 0 {
-            return Err(io::Error::last_os_error());
-        }
-
+        unsafe { ffi::ibv_query_gid(ctx, PORT_NUM, 0, gid.as_mut())? };
+        
         Ok(Context {
             ctx,
             port_attr,
@@ -429,17 +403,13 @@ impl Context {
                 ptr::null::<c_void>().offset(id) as *mut _,
                 ptr::null::<c_void>() as *mut _,
                 0,
-            )
+            )?
         };
 
-        if cq.is_null() {
-            Err(io::Error::last_os_error())
-        } else {
-            Ok(CompletionQueue {
-                _phantom: PhantomData,
-                cq,
-            })
-        }
+        Ok(CompletionQueue {
+            _phantom: PhantomData,
+            cq,
+        })
     }
 
     /// Allocate a protection domain (PDs) for the device's context.
@@ -450,22 +420,16 @@ impl Context {
     /// can work together. If several objects were created using PD1, and others were created using
     /// PD2, working with objects from group1 together with objects from group2 will not work.
     pub fn alloc_pd(&self) -> io::Result<ProtectionDomain<'_>> {
-        let pd = unsafe { ffi::ibv_alloc_pd(self.ctx) };
-        if pd.is_null() {
-            Err(io::Error::new(
-                io::ErrorKind::Other,
-                "obv_alloc_pd returned null",
-            ))
-        } else {
-            Ok(ProtectionDomain { ctx: self, pd })
-        }
+        let pd = unsafe {
+            ffi::ibv_alloc_pd(self.ctx)?
+        };
+        Ok(ProtectionDomain { ctx: self, pd })
     }
 }
 
 impl Drop for Context {
     fn drop(&mut self) {
-        let ok = unsafe { ffi::ibv_close_device(self.ctx) };
-        assert_eq!(ok, 0);
+        unsafe { ffi::ibv_close_device(self.ctx).unwrap() };
     }
 }
 
@@ -517,7 +481,7 @@ impl<'ctx> CompletionQueue<'ctx> {
                 self.cq,
                 completions.len() as i32,
                 completions.as_mut_ptr(),
-            )
+            )?
         };
 
         if n < 0 {
@@ -530,11 +494,7 @@ impl<'ctx> CompletionQueue<'ctx> {
 
 impl<'a> Drop for CompletionQueue<'a> {
     fn drop(&mut self) {
-        let errno = unsafe { ffi::ibv_destroy_cq(self.cq) };
-        if errno != 0 {
-            let e = io::Error::from_raw_os_error(errno);
-            panic!("{}", e);
-        }
+        unsafe { ffi::ibv_destroy_cq(self.cq).unwrap() };
     }
 }
 
@@ -898,27 +858,23 @@ impl<'res> QueuePairBuilder<'res> {
             sq_sig_all: 0,
         };
 
-        let qp = unsafe { ffi::ibv_create_qp(self.pd.pd, &mut attr as *mut _) };
-        if qp.is_null() {
-            Err(io::Error::last_os_error())
-        } else {
-            Ok(PreparedQueuePair {
-                ctx: self.pd.ctx,
-                qp: QueuePair {
-                    _phantom: PhantomData,
-                    qp,
-                },
-                access: self.access,
-                timeout: self.timeout,
-                retry_count: self.retry_count,
-                rnr_retry: self.rnr_retry,
-                min_rnr_timer: self.min_rnr_timer,
-                max_rd_atomic: self.max_rd_atomic,
-                max_dest_rd_atomic: self.max_dest_rd_atomic,
-                path_mtu: self.path_mtu,
-                rq_psn: self.rq_psn,
-            })
-        }
+        let qp = unsafe { ffi::ibv_create_qp(self.pd.pd, &mut attr as *mut _)? };
+        Ok(PreparedQueuePair {
+            ctx: self.pd.ctx,
+            qp: QueuePair {
+                _phantom: PhantomData,
+                qp,
+            },
+            access: self.access,
+            timeout: self.timeout,
+            retry_count: self.retry_count,
+            rnr_retry: self.rnr_retry,
+            min_rnr_timer: self.min_rnr_timer,
+            max_rd_atomic: self.max_rd_atomic,
+            max_dest_rd_atomic: self.max_dest_rd_atomic,
+            path_mtu: self.path_mtu,
+            rq_psn: self.rq_psn,
+        })
     }
 }
 
@@ -1115,10 +1071,7 @@ impl<'res> PreparedQueuePair<'res> {
             attr.qp_access_flags = access;
             mask |= ffi::ibv_qp_attr_mask::IBV_QP_ACCESS_FLAGS;
         }
-        let errno = unsafe { ffi::ibv_modify_qp(self.qp.qp, &mut attr as *mut _, mask) };
-        if errno != 0 {
-            return Err(io::Error::from_raw_os_error(errno));
-        }
+        unsafe { ffi::ibv_modify_qp(self.qp.qp, &mut attr as *mut _, mask)? };
 
         // set ready to receive
         let mut attr = ffi::ibv_qp_attr {
@@ -1160,10 +1113,7 @@ impl<'res> PreparedQueuePair<'res> {
             attr.rq_psn = rq_psn;
             mask |= ffi::ibv_qp_attr_mask::IBV_QP_RQ_PSN;
         }
-        let errno = unsafe { ffi::ibv_modify_qp(self.qp.qp, &mut attr as *mut _, mask) };
-        if errno != 0 {
-            return Err(io::Error::from_raw_os_error(errno));
-        }
+        unsafe { ffi::ibv_modify_qp(self.qp.qp, &mut attr as *mut _, mask)? };
 
         // set ready to send
         let mut attr = ffi::ibv_qp_attr {
@@ -1188,10 +1138,7 @@ impl<'res> PreparedQueuePair<'res> {
             attr.max_rd_atomic = max_rd_atomic;
             mask |= ffi::ibv_qp_attr_mask::IBV_QP_MAX_QP_RD_ATOMIC;
         }
-        let errno = unsafe { ffi::ibv_modify_qp(self.qp.qp, &mut attr as *mut _, mask) };
-        if errno != 0 {
-            return Err(io::Error::from_raw_os_error(errno));
-        }
+        unsafe { ffi::ibv_modify_qp(self.qp.qp, &mut attr as *mut _, mask)? };
 
         Ok(self.qp)
     }
@@ -1234,11 +1181,7 @@ impl<T> LocalMemoryRegion<T> {
 
 impl<T> Drop for LocalMemoryRegion<T> {
     fn drop(&mut self) {
-        let errno = unsafe { ffi::ibv_dereg_mr(self.mr) };
-        if errno != 0 {
-            let e = io::Error::from_raw_os_error(errno);
-            panic!("{}", e);
-        }
+        unsafe { ffi::ibv_dereg_mr(self.mr).unwrap() };
     }
 }
 
@@ -1349,7 +1292,7 @@ impl<'ctx> ProtectionDomain<'ctx> {
                 data.as_mut_ptr() as *mut _,
                 n * mem::size_of::<T>(),
                 access,
-            )
+            )?
         };
 
         // TODO
@@ -1360,21 +1303,13 @@ impl<'ctx> ProtectionDomain<'ctx> {
         // places this rkey as the rkey field of struct ibv_send_wr passed to the ibv_post_send
         // function.
 
-        if mr.is_null() {
-            Err(io::Error::last_os_error())
-        } else {
-            Ok(LocalMemoryRegion { mr, data })
-        }
+        Ok(LocalMemoryRegion { mr, data })
     }
 }
 
 impl<'a> Drop for ProtectionDomain<'a> {
     fn drop(&mut self) {
-        let errno = unsafe { ffi::ibv_dealloc_pd(self.pd) };
-        if errno != 0 {
-            let e = io::Error::from_raw_os_error(errno);
-            panic!("{}", e);
-        }
+        unsafe { ffi::ibv_dealloc_pd(self.pd).unwrap() };
     }
 }
 
@@ -1470,13 +1405,8 @@ impl<'res> QueuePair<'res> {
 
         let ctx = (*self.qp).context;
         let ops = &mut (*ctx).ops;
-        let errno =
-            ops.post_send.as_mut().unwrap()(self.qp, &mut wr as *mut _, &mut bad_wr as *mut _);
-        if errno != 0 {
-            Err(io::Error::from_raw_os_error(errno))
-        } else {
-            Ok(())
-        }
+        ops.post_send.as_mut().unwrap()(self.qp, &mut wr as *mut _, &mut bad_wr as *mut _)?;
+        Ok(())
     }
 
     /// Posts a linked list of Work Requests (WRs) to the Receive Queue of this Queue Pair.
@@ -1546,13 +1476,8 @@ impl<'res> QueuePair<'res> {
 
         let ctx = (*self.qp).context;
         let ops = &mut (*ctx).ops;
-        let errno =
-            ops.post_recv.as_mut().unwrap()(self.qp, &mut wr as *mut _, &mut bad_wr as *mut _);
-        if errno != 0 {
-            Err(io::Error::from_raw_os_error(errno))
-        } else {
-            Ok(())
-        }
+        ops.post_recv.as_mut().unwrap()(self.qp, &mut wr as *mut _, &mut bad_wr as *mut _)?;
+        Ok(())
     }
 
     /// Posts a RDMA Write Work Request (WR) to the Send Queue of this Queue Pair.
@@ -1660,13 +1585,8 @@ impl<'res> QueuePair<'res> {
 
         let ctx = (*self.qp).context;
         let ops = &mut (*ctx).ops;
-        let errno =
-            ops.post_send.as_mut().unwrap()(self.qp, &mut wr as *mut _, &mut bad_wr as *mut _);
-        if errno != 0 {
-            Err(io::Error::from_raw_os_error(errno))
-        } else {
-            Ok(())
-        }
+        ops.post_send.as_mut().unwrap()(self.qp, &mut wr as *mut _, &mut bad_wr as *mut _)?;
+        Ok(())
     }
 
     /// Posts a RDMA Read Work Request (WR) to the Send Queue of this Queue Pair.
@@ -1774,24 +1694,15 @@ impl<'res> QueuePair<'res> {
 
         let ctx = (*self.qp).context;
         let ops = &mut (*ctx).ops;
-        let errno =
-            ops.post_send.as_mut().unwrap()(self.qp, &mut wr as *mut _, &mut bad_wr as *mut _);
-        if errno != 0 {
-            Err(io::Error::from_raw_os_error(errno))
-        } else {
-            Ok(())
-        }
+        ops.post_send.as_mut().unwrap()(self.qp, &mut wr as *mut _, &mut bad_wr as *mut _)?;
+        Ok(())
     }
 }
 
 impl<'a> Drop for QueuePair<'a> {
     fn drop(&mut self) {
         // TODO: ibv_destroy_qp() fails if the QP is attached to a multicast group.
-        let errno = unsafe { ffi::ibv_destroy_qp(self.qp) };
-        if errno != 0 {
-            let e = io::Error::from_raw_os_error(errno);
-            panic!("{}", e);
-        }
+        unsafe { ffi::ibv_destroy_qp(self.qp).unwrap() };
     }
 }
 
