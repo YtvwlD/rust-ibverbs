@@ -79,7 +79,7 @@ use core::ops::Range;
 use std::io;
 
 #[cfg(not(feature = "std"))]
-use alloc::{vec, vec::Vec};
+use alloc::{boxed::Box, ffi::CString, vec, vec::Vec};
 #[cfg(not(feature = "std"))]
 use core2::io;
 
@@ -268,12 +268,9 @@ impl<'devlist> Device<'devlist> {
     ///  - an *index* that helps to differentiate between several devices from the same vendor and
     ///    family in the same computer
     pub fn name(&self) -> Option<&'devlist CStr> {
-        let name_ptr = ffi::ibv_get_device_name(&self.0)?;
-        if name_ptr.is_null() {
-            None
-        } else {
-            Some(unsafe { CStr::from_ptr(name_ptr) })
-        }
+        let name_str = ffi::ibv_get_device_name(&self.0)?;
+        let cstring = CString::new(name_str).ok()?;
+        Some(Box::leak(cstring.into_boxed_c_str()))
     }
 
     /// Returns the Global Unique IDentifier (GUID) of this RDMA device.
