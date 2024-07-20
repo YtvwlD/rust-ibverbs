@@ -404,7 +404,7 @@ impl Context {
 /// A completion queue that allows subscribing to the completion of queued sends and receives.
 pub struct CompletionQueue<'ctx> {
     ops: &'ctx ffi::ibv_context_ops,
-    cq: ffi::ibv_cq,
+    cq: ffi::ibv_cq<'ctx>,
 }
 
 unsafe impl<'a> Send for CompletionQueue<'a> {}
@@ -1137,7 +1137,7 @@ pub struct RemoteKey(u32);
 /// A protection domain for a device's context.
 pub struct ProtectionDomain<'ctx> {
     ctx: &'ctx Context,
-    pd: ffi::ibv_pd,
+    pd: ffi::ibv_pd<'ctx>,
 }
 
 unsafe impl<'a> Sync for ProtectionDomain<'a> {}
@@ -1246,7 +1246,7 @@ impl<'ctx> ProtectionDomain<'ctx> {
 /// is a resource of an RDMA device and a QP number can be used by one process at the same time
 /// (similar to a socket that is associated with a specific TCP or UDP port number)
 pub struct QueuePair<'res> {
-    qp: ffi::ibv_qp<'res>,
+    qp: ffi::ibv_qp<'res, 'res>,
 }
 
 unsafe impl<'a> Send for QueuePair<'a> {}
