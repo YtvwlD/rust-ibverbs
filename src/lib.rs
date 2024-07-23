@@ -800,7 +800,7 @@ impl<'res> QueuePairBuilder<'res> {
     ///  - `ENOSYS`: QP with this Transport Service Type isn't supported by this RDMA device.
     ///  - `EPERM`: Not enough permissions to create a QP with this Transport Service Type.
     pub fn build(&self) -> io::Result<PreparedQueuePair<'res>> {
-        let attr = ffi::ibv_qp_init_attr {
+        let mut attr = ffi::ibv_qp_init_attr {
             qp_context: 0,
             send_cq: &self.send.cq,
             recv_cq: &self.recv.cq,
@@ -816,7 +816,7 @@ impl<'res> QueuePairBuilder<'res> {
             sq_sig_all: 0,
         };
 
-        let qp = ffi::ibv_create_qp(&self.pd.pd, &attr)?;
+        let qp = ffi::ibv_create_qp(&self.pd.pd, &mut attr)?;
         Ok(PreparedQueuePair {
             ctx: self.pd.ctx,
             qp: QueuePair {
