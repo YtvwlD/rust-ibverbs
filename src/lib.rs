@@ -1102,29 +1102,29 @@ impl<'res> PreparedQueuePair<'res> {
 }
 
 /// A memory region that has been registered for use with RDMA.
-pub struct MemoryRegion<T> {
-    mr: ffi::ibv_mr,
+pub struct MemoryRegion<'pd, T> {
+    mr: ffi::ibv_mr<'pd>,
     data: Vec<T>,
 }
 
-unsafe impl<T> Send for MemoryRegion<T> {}
-unsafe impl<T> Sync for MemoryRegion<T> {}
+unsafe impl<'pd, T> Send for MemoryRegion<'pd, T> {}
+unsafe impl<'pd, T> Sync for MemoryRegion<'pd, T> {}
 
 use core::ops::{Deref, DerefMut};
-impl<T> Deref for MemoryRegion<T> {
+impl<'pd, T> Deref for MemoryRegion<'pd, T> {
     type Target = [T];
     fn deref(&self) -> &Self::Target {
         &self.data[..]
     }
 }
 
-impl<T> DerefMut for MemoryRegion<T> {
+impl<'pd, T> DerefMut for MemoryRegion<'pd, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.data[..]
     }
 }
 
-impl<T> MemoryRegion<T> {
+impl<'pd, T> MemoryRegion<'pd, T> {
     /// Get the remote authentication key used to allow direct remote access to this memory region.
     pub fn rkey(&self) -> RemoteKey {
         RemoteKey(self.mr.rkey)
@@ -1209,7 +1209,7 @@ impl<'ctx> ProtectionDomain<'ctx> {
     ///  - `EINVAL`: Invalid access value.
     ///  - `ENOMEM`: Not enough resources (either in operating system or in RDMA device) to
     ///    complete this operation.
-    pub fn allocate<T: Sized + Copy + Default>(&self, n: usize) -> io::Result<MemoryRegion<T>> {
+    pub fn allocate<'pd, T: Sized + Copy + Default>(&'pd self, n: usize) -> io::Result<MemoryRegion<'pd, T>> {
         assert!(n > 0);
         assert!(mem::size_of::<T>() > 0);
 
@@ -1284,9 +1284,9 @@ impl<'res> QueuePair<'res> {
     ///
     /// [1]: http://www.rdmamojo.com/2013/01/26/ibv_post_send/
     #[inline]
-    pub unsafe fn post_send<T, R>(
+    pub unsafe fn post_send<'pd, T, R>(
         &mut self,
-        mr: &mut MemoryRegion<T>,
+        mr: &mut MemoryRegion<'pd, T>,
         range: R,
         wr_id: u64,
     ) -> io::Result<()>
@@ -1360,9 +1360,9 @@ impl<'res> QueuePair<'res> {
     ///
     /// [1]: http://www.rdmamojo.com/2013/02/02/ibv_post_recv/
     #[inline]
-    pub unsafe fn post_receive<T, R>(
+    pub unsafe fn post_receive<'pd, T, R>(
         &mut self,
-        mr: &mut MemoryRegion<T>,
+        mr: &mut MemoryRegion<'pd, T>,
         range: R,
         wr_id: u64,
     ) -> io::Result<()>
