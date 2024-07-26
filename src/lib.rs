@@ -1106,29 +1106,29 @@ impl<'res> PreparedQueuePair<'res> {
 }
 
 /// A (local) memory region that has been registered for use with RDMA.
-pub struct LocalMemoryRegion<T> {
-    mr: ffi::ibv_mr,
+pub struct LocalMemoryRegion<'pd, T> {
+    mr: ffi::ibv_mr<'pd>,
     data: Vec<T>,
 }
 
-unsafe impl<T> Send for LocalMemoryRegion<T> {}
-unsafe impl<T> Sync for LocalMemoryRegion<T> {}
+unsafe impl<'pd, T> Send for LocalMemoryRegion<'pd, T> {}
+unsafe impl<'pd, T> Sync for LocalMemoryRegion<'pd, T> {}
 
 use core::ops::{Deref, DerefMut};
-impl<T> Deref for LocalMemoryRegion<T> {
+impl<'pd, T> Deref for LocalMemoryRegion<'pd, T> {
     type Target = [T];
     fn deref(&self) -> &Self::Target {
         &self.data[..]
     }
 }
 
-impl<T> DerefMut for LocalMemoryRegion<T> {
+impl<'pd, T> DerefMut for LocalMemoryRegion<'pd, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.data[..]
     }
 }
 
-impl<T> LocalMemoryRegion<T> {
+impl<'pd, T> LocalMemoryRegion<'pd, T> {
     /// Get the remote authentication used to allow direct remote access to this memory region.
     pub fn remote(&mut self) -> RemoteMemoryRegion<T> {
         RemoteMemoryRegion {
@@ -1231,10 +1231,10 @@ impl<'ctx> ProtectionDomain<'ctx> {
     ///  - `EINVAL`: Invalid access value.
     ///  - `ENOMEM`: Not enough resources (either in operating system or in RDMA device) to
     ///    complete this operation.
-    pub fn allocate<T: Sized + Copy + Default>(
-        &self,
+    pub fn allocate<'pd, T: Sized + Copy + Default>(
+        &'pd self,
         n: usize,
-    ) -> io::Result<LocalMemoryRegion<T>> {
+    ) -> io::Result<LocalMemoryRegion<'pd, T>> {
         assert!(n > 0);
         assert!(mem::size_of::<T>() > 0);
 
@@ -1309,9 +1309,9 @@ impl<'res> QueuePair<'res> {
     ///
     /// [1]: http://www.rdmamojo.com/2013/01/26/ibv_post_send/
     #[inline]
-    pub unsafe fn post_send<T, R>(
+    pub unsafe fn post_send<'pd, T, R>(
         &mut self,
-        mr: &mut LocalMemoryRegion<T>,
+        mr: &mut LocalMemoryRegion<'pd, T>,
         range: R,
         wr_id: u64,
     ) -> io::Result<()>
@@ -1385,9 +1385,9 @@ impl<'res> QueuePair<'res> {
     ///
     /// [1]: http://www.rdmamojo.com/2013/02/02/ibv_post_recv/
     #[inline]
-    pub unsafe fn post_receive<T, R>(
+    pub unsafe fn post_receive<'pd, T, R>(
         &mut self,
-        mr: &mut LocalMemoryRegion<T>,
+        mr: &mut LocalMemoryRegion<'pd, T>,
         range: R,
         wr_id: u64,
     ) -> io::Result<()>
@@ -1454,9 +1454,9 @@ impl<'res> QueuePair<'res> {
     ///
     /// [1]: http://www.rdmamojo.com/2013/01/26/ibv_post_send/
     #[inline]
-    pub unsafe fn rdma_write<T, R>(
+    pub unsafe fn rdma_write<'pd, T, R>(
         &mut self,
-        local_mr: &mut LocalMemoryRegion<T>,
+        local_mr: &mut LocalMemoryRegion<'pd, T>,
         local_range: R,
         remote_mr: &mut RemoteMemoryRegion<T>,
         remote_range: Range<u64>,
@@ -1560,11 +1560,11 @@ impl<'res> QueuePair<'res> {
     ///
     /// [1]: http://www.rdmamojo.com/2013/01/26/ibv_post_send/
     #[inline]
-    pub unsafe fn rdma_read<T, R>(
+    pub unsafe fn rdma_read<'pd, T, R>(
         &mut self,
         remote_mr: &mut RemoteMemoryRegion<T>,
         remote_range: Range<u64>,
-        local_mr: &mut LocalMemoryRegion<T>,
+        local_mr: &mut LocalMemoryRegion<'pd, T>,
         local_range: R,
         wr_id: u64,
     ) -> io::Result<()>
