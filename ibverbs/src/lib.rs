@@ -1282,7 +1282,7 @@ impl<'ctx> ProtectionDomain<'ctx> {
         'rcq: 'res,
         'pd: 'res,
     {
-        QueuePairBuilder::new(self, send, 1, recv, 1, qp_type)
+        QueuePairBuilder::new(self, send, 256, recv, 256, qp_type)
     }
 
     /// Allocates and registers a Memory Region (MR) associated with this `ProtectionDomain`.
