@@ -1,4 +1,6 @@
 use std::env;
+use std::fs::File;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -22,6 +24,14 @@ fn main() {
             "vendor source not included"
         );
     }
+    // disable assertions
+    let mut build_assert = File::create("vendor/rdma-core/ccan/build_assert.h")
+        .expect("failed to open built_assert.h");
+    writeln!(build_assert, "#ifndef CCAN_BUILD_ASSERT_H").unwrap();
+    writeln!(build_assert, "#define CCAN_BUILD_ASSERT_H").unwrap();
+    writeln!(build_assert, "#define BUILD_ASSERT(cond) do {{}} while(0)").unwrap();
+    writeln!(build_assert, "#define BUILD_ASSERT_OR_ZERO(cond) 0").unwrap();
+    writeln!(build_assert, "#endif").unwrap();
 
     // build vendor/rdma-core
     eprintln!("run cmake");
