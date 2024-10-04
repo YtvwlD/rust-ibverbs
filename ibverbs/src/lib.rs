@@ -70,6 +70,7 @@ use std::ffi::CStr;
 use std::io;
 use std::marker::PhantomData;
 use std::mem;
+use std::ops::Range;
 use std::os::raw::c_void;
 use std::ptr;
 
@@ -1186,47 +1187,42 @@ impl<'res> PreparedQueuePair<'res> {
     }
 }
 
-/// A memory region that has been registered for use with RDMA.
-pub struct MemoryRegion<T> {
+/// A (local) memory region that has been registered for use with RDMA.
+pub struct LocalMemoryRegion<T> {
     mr: *mut ffi::ibv_mr,
     data: Vec<T>,
 }
 
-unsafe impl<T> Send for MemoryRegion<T> {}
-unsafe impl<T> Sync for MemoryRegion<T> {}
+unsafe impl<T> Send for LocalMemoryRegion<T> {}
+unsafe impl<T> Sync for LocalMemoryRegion<T> {}
 
 use std::ops::{Deref, DerefMut};
-impl<T> Deref for MemoryRegion<T> {
+impl<T> Deref for LocalMemoryRegion<T> {
     type Target = [T];
     fn deref(&self) -> &Self::Target {
         &self.data[..]
     }
 }
 
-impl<T> DerefMut for MemoryRegion<T> {
+impl<T> DerefMut for LocalMemoryRegion<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.data[..]
     }
 }
 
-impl<T> MemoryRegion<T> {
-    /// Get the remote authentication key used to allow direct remote access to this memory region.
-    pub fn rkey(&self) -> RemoteKey {
-        RemoteKey {
-            key: unsafe { &*self.mr }.rkey,
+impl<T> LocalMemoryRegion<T> {
+    /// Get the remote authentication used to allow direct remote access to this memory region.
+    pub fn remote(&mut self) -> RemoteMemoryRegion<T> {
+        RemoteMemoryRegion {
+            addr: unsafe { *self.mr }.addr as u64,
+            len: unsafe { *self.mr }.length,
+            rkey: unsafe { *self.mr }.rkey,
+            phantom: PhantomData {},
         }
     }
 }
 
-/// A key that authorizes direct memory access to a memory region.
-#[derive(Debug, Clone, Copy)]
-#[non_exhaustive]
-pub struct RemoteKey {
-    /// The actual key value.
-    pub key: u32,
-}
-
-impl<T> Drop for MemoryRegion<T> {
+impl<T> Drop for LocalMemoryRegion<T> {
     fn drop(&mut self) {
         let errno = unsafe { ffi::ibv_dereg_mr(self.mr) };
         if errno != 0 {
@@ -1234,6 +1230,22 @@ impl<T> Drop for MemoryRegion<T> {
             panic!("{}", e);
         }
     }
+}
+
+/// A (remote) memory region that has been registered for use with RDMA.
+///
+/// Having this information authorizes direct memory access to a memory region.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct RemoteMemoryRegion<T> {
+    /// the remote pointer
+    pub addr: u64,
+    /// the length
+    pub len: usize,
+    /// the remote key
+    pub rkey: u32,
+    /// This holds the type.
+    pub phantom: PhantomData<T>,
 }
 
 /// A protection domain for a device's context.
@@ -1307,7 +1319,10 @@ impl<'ctx> ProtectionDomain<'ctx> {
     ///  - `EINVAL`: Invalid access value.
     ///  - `ENOMEM`: Not enough resources (either in operating system or in RDMA device) to
     ///    complete this operation.
-    pub fn allocate<T: Sized + Copy + Default>(&self, n: usize) -> io::Result<MemoryRegion<T>> {
+    pub fn allocate<T: Sized + Copy + Default>(
+        &self,
+        n: usize,
+    ) -> io::Result<LocalMemoryRegion<T>> {
         assert!(n > 0);
         assert!(mem::size_of::<T>() > 0);
 
@@ -1338,7 +1353,7 @@ impl<'ctx> ProtectionDomain<'ctx> {
         if mr.is_null() {
             Err(io::Error::last_os_error())
         } else {
-            Ok(MemoryRegion { mr, data })
+            Ok(LocalMemoryRegion { mr, data })
         }
     }
 }
@@ -1402,7 +1417,7 @@ impl<'res> QueuePair<'res> {
     #[inline]
     pub unsafe fn post_send<T, R>(
         &mut self,
-        mr: &mut MemoryRegion<T>,
+        mr: &mut LocalMemoryRegion<T>,
         range: R,
         wr_id: u64,
     ) -> io::Result<()>
@@ -1468,7 +1483,7 @@ impl<'res> QueuePair<'res> {
     ///
     /// Internally, the memory at `mr[range]` will be received into as a single `ibv_recv_wr`.
     ///
-    /// See also [DDMAmojo's `ibv_post_recv` documentation][1].
+    /// See also [RDMAmojo's `ibv_post_recv` documentation][1].
     ///
     /// # Safety
     ///
@@ -1486,7 +1501,7 @@ impl<'res> QueuePair<'res> {
     #[inline]
     pub unsafe fn post_receive<T, R>(
         &mut self,
-        mr: &mut MemoryRegion<T>,
+        mr: &mut LocalMemoryRegion<T>,
         range: R,
         wr_id: u64,
     ) -> io::Result<()>
@@ -1523,6 +1538,234 @@ impl<'res> QueuePair<'res> {
         let ops = &mut (*ctx).ops;
         let errno =
             ops.post_recv.as_mut().unwrap()(self.qp, &mut wr as *mut _, &mut bad_wr as *mut _);
+        if errno != 0 {
+            Err(io::Error::from_raw_os_error(errno))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Posts a RDMA Write Work Request (WR) to the Send Queue of this Queue Pair.
+    ///
+    /// Generates a HW-specific Send Request for the memory at `mr[range]`, and adds it to the tail
+    /// of the Queue Pair's Send Queue without performing any context switch. The RDMA device will
+    /// handle it (later) in asynchronous way. If there is a failure in one of the WRs because the
+    /// Send Queue is full or one of the attributes in the WR is bad, it stops immediately and
+    /// return the pointer to that WR.
+    ///
+    /// `wr_id` is a 64 bits value associated with this WR. If a Work Completion will be generated
+    /// when this Work Request ends, it will contain this value.
+    ///
+    /// Internally, the memory at `mr[range]` will be sent as a single `ibv_send_wr` using
+    /// `IBV_WR_RDMA_WRITE`. The send has `IBV_SEND_SIGNALED` set, so a work completion will also
+    /// be triggered as a result of this write.
+    ///
+    /// See also [RDMAmojo's `ibv_post_send` documentation][1].
+    ///
+    /// # Safety
+    ///
+    /// The memory region can only be safely reused or dropped after the request is fully executed
+    /// and a work completion has been retrieved from the corresponding completion queue (i.e.,
+    /// until `CompletionQueue::poll` returns a completion for this send).
+    ///
+    /// # Errors
+    ///
+    ///  - `EINVAL`: Invalid value provided in the Work Request.
+    ///  - `ENOMEM`: Send Queue is full or not enough resources to complete this operation.
+    ///  - `EFAULT`: Invalid value provided in `QueuePair`.
+    ///
+    /// [1]: http://www.rdmamojo.com/2013/01/26/ibv_post_send/
+    #[inline]
+    pub unsafe fn rdma_write<T, R>(
+        &mut self,
+        local_mr: &mut LocalMemoryRegion<T>,
+        local_range: R,
+        remote_mr: &mut RemoteMemoryRegion<T>,
+        remote_range: Range<u64>,
+        wr_id: u64,
+    ) -> io::Result<()>
+    where
+        R: sliceindex::SliceIndex<[T], Output = [T]>,
+    {
+        let local_range = local_range.index(local_mr);
+        // check memory bounds before access
+        let remote_start = remote_mr.addr + remote_range.start;
+        let remote_end = remote_mr.addr + remote_range.end;
+        if remote_end < remote_start {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "remote range is invalid",
+            ));
+        }
+        if remote_range.end > remote_mr.len as u64 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "remote range is invalid",
+            ));
+        }
+        if local_range.len() != remote_range.count() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "local and remote range must have the same size",
+            ));
+        }
+
+        let mut sge = ffi::ibv_sge {
+            addr: local_range.as_ptr() as u64,
+            length: mem::size_of_val(local_range) as u32,
+            lkey: (*local_mr.mr).lkey,
+        };
+        let mut wr = ffi::ibv_send_wr {
+            wr_id,
+            next: ptr::null::<ffi::ibv_send_wr>() as *mut _,
+            sg_list: &mut sge as *mut _,
+            num_sge: 1,
+            opcode: ffi::ibv_wr_opcode::IBV_WR_RDMA_WRITE,
+            send_flags: ffi::ibv_send_flags::IBV_SEND_SIGNALED.0,
+            wr: ffi::ibv_send_wr__bindgen_ty_2 {
+                rdma: ffi::ibv_send_wr__bindgen_ty_2__bindgen_ty_1 {
+                    remote_addr: remote_mr.addr,
+                    rkey: remote_mr.rkey,
+                },
+            },
+            qp_type: Default::default(),
+            __bindgen_anon_1: Default::default(),
+            __bindgen_anon_2: Default::default(),
+        };
+        let mut bad_wr: *mut ffi::ibv_send_wr = ptr::null::<ffi::ibv_send_wr>() as *mut _;
+
+        // TODO:
+        //
+        // ibv_post_send()  posts the linked list of work requests (WRs) starting with wr to the
+        // send queue of the queue pair qp.  It stops processing WRs from this list at the first
+        // failure (that can  be  detected  immediately  while  requests  are  being posted), and
+        // returns this failing WR through bad_wr.
+        //
+        // The user should not alter or destroy AHs associated with WRs until request is fully
+        // executed and  a  work  completion  has been retrieved from the corresponding completion
+        // queue (CQ) to avoid unexpected behavior.
+        //
+        // ... However, if the IBV_SEND_INLINE flag was set, the  buffer  can  be reused
+        // immediately after the call returns.
+
+        let ctx = (*self.qp).context;
+        let ops = &mut (*ctx).ops;
+        let errno =
+            ops.post_send.as_mut().unwrap()(self.qp, &mut wr as *mut _, &mut bad_wr as *mut _);
+        if errno != 0 {
+            Err(io::Error::from_raw_os_error(errno))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Posts a RDMA Read Work Request (WR) to the Send Queue of this Queue Pair.
+    ///
+    /// Generates a HW-specific Send Request for the memory at `mr[range]`, and adds it to the tail
+    /// of the Queue Pair's Send Queue without performing any context switch. The RDMA device will
+    /// handle it (later) in asynchronous way. If there is a failure in one of the WRs because the
+    /// Send Queue is full or one of the attributes in the WR is bad, it stops immediately and
+    /// return the pointer to that WR.
+    ///
+    /// `wr_id` is a 64 bits value associated with this WR. If a Work Completion will be generated
+    /// when this Work Request ends, it will contain this value.
+    ///
+    /// Internally, the whole memory at `mr[range]` will be transferred as a single `ibv_send_wr`
+    /// using `IBV_WR_RDMA_READ`. The send has `IBV_SEND_SIGNALED` set, so a work completion will
+    /// also be triggered as a result of this read.
+    ///
+    /// See also [RDMAmojo's `ibv_post_send` documentation][1].
+    ///
+    /// # Safety
+    ///
+    /// The memory region can only be safely reused or dropped after the request is fully executed
+    /// and a work completion has been retrieved from the corresponding completion queue (i.e.,
+    /// until `CompletionQueue::poll` returns a completion for this send).
+    ///
+    /// # Errors
+    ///
+    ///  - `EINVAL`: Invalid value provided in the Work Request.
+    ///  - `ENOMEM`: Send Queue is full or not enough resources to complete this operation.
+    ///  - `EFAULT`: Invalid value provided in `QueuePair`.
+    ///
+    /// [1]: http://www.rdmamojo.com/2013/01/26/ibv_post_send/
+    #[inline]
+    pub unsafe fn rdma_read<T, R>(
+        &mut self,
+        remote_mr: &mut RemoteMemoryRegion<T>,
+        remote_range: Range<u64>,
+        local_mr: &mut LocalMemoryRegion<T>,
+        local_range: R,
+        wr_id: u64,
+    ) -> io::Result<()>
+    where
+        R: sliceindex::SliceIndex<[T], Output = [T]>,
+    {
+        let local_range = local_range.index(local_mr);
+        // check memory bounds before access
+        let remote_start = remote_mr.addr + remote_range.start;
+        let remote_end = remote_mr.addr + remote_range.end;
+        if remote_end < remote_start {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "remote range is invalid",
+            ));
+        }
+        if remote_range.end > remote_mr.len as u64 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "remote range is invalid",
+            ));
+        }
+        if local_range.len() != remote_range.count() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "local and remote range must have the same size",
+            ));
+        }
+
+        let mut sge = ffi::ibv_sge {
+            addr: local_range.as_ptr() as u64,
+            length: mem::size_of_val(local_range) as u32,
+            lkey: (*local_mr.mr).lkey,
+        };
+        let mut wr = ffi::ibv_send_wr {
+            wr_id,
+            next: ptr::null::<ffi::ibv_send_wr>() as *mut _,
+            sg_list: &mut sge as *mut _,
+            num_sge: 1,
+            opcode: ffi::ibv_wr_opcode::IBV_WR_RDMA_READ,
+            send_flags: ffi::ibv_send_flags::IBV_SEND_SIGNALED.0,
+            wr: ffi::ibv_send_wr__bindgen_ty_2 {
+                rdma: ffi::ibv_send_wr__bindgen_ty_2__bindgen_ty_1 {
+                    remote_addr: remote_mr.addr,
+                    rkey: remote_mr.rkey,
+                },
+            },
+            qp_type: Default::default(),
+            __bindgen_anon_1: Default::default(),
+            __bindgen_anon_2: Default::default(),
+        };
+        let mut bad_wr: *mut ffi::ibv_send_wr = ptr::null::<ffi::ibv_send_wr>() as *mut _;
+
+        // TODO:
+        //
+        // ibv_post_send()  posts the linked list of work requests (WRs) starting with wr to the
+        // send queue of the queue pair qp.  It stops processing WRs from this list at the first
+        // failure (that can  be  detected  immediately  while  requests  are  being posted), and
+        // returns this failing WR through bad_wr.
+        //
+        // The user should not alter or destroy AHs associated with WRs until request is fully
+        // executed and  a  work  completion  has been retrieved from the corresponding completion
+        // queue (CQ) to avoid unexpected behavior.
+        //
+        // ... However, if the IBV_SEND_INLINE flag was set, the  buffer  can  be reused
+        // immediately after the call returns.
+
+        let ctx = (*self.qp).context;
+        let ops = &mut (*ctx).ops;
+        let errno =
+            ops.post_send.as_mut().unwrap()(self.qp, &mut wr as *mut _, &mut bad_wr as *mut _);
         if errno != 0 {
             Err(io::Error::from_raw_os_error(errno))
         } else {
