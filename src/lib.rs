@@ -1500,11 +1500,9 @@ impl<'res> QueuePair<'res> {
             num_sge: 1,
             opcode: ffi::ibv_wr_opcode::IBV_WR_RDMA_WRITE,
             send_flags: ffi::ibv_send_flags::IBV_SEND_SIGNALED,
-            wr: ffi::ibv_send_wr__bindgen_ty_2 {
-                rdma: ffi::ibv_send_wr__bindgen_ty_2__bindgen_ty_1 {
-                    remote_addr: remote_mr.addr,
-                    rkey: remote_mr.rkey,
-                },
+            wr: ffi::ibv_send_wr_wr::rdma {
+                remote_addr: remote_mr.addr,
+                rkey: remote_mr.rkey,
             },
             qp_type: Default::default(),
             __bindgen_anon_1: Default::default(),
@@ -1606,11 +1604,9 @@ impl<'res> QueuePair<'res> {
             num_sge: 1,
             opcode: ffi::ibv_wr_opcode::IBV_WR_RDMA_READ,
             send_flags: ffi::ibv_send_flags::IBV_SEND_SIGNALED,
-            wr: ffi::ibv_send_wr__bindgen_ty_2 {
-                rdma: ffi::ibv_send_wr__bindgen_ty_2__bindgen_ty_1 {
-                    remote_addr: remote_mr.addr,
-                    rkey: remote_mr.rkey,
-                },
+            wr: ffi::ibv_send_wr_wr::rdma {
+                remote_addr: remote_mr.addr,
+                rkey: remote_mr.rkey,
             },
             qp_type: Default::default(),
             __bindgen_anon_1: Default::default(),
